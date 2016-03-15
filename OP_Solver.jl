@@ -4,6 +4,7 @@ module OP_Solver
     export SimpleOP,
         GurobiExactSolver
     export solve_op,
+        solve_exact_op,
         reward,
         distance,
         build_path,
