@@ -3,77 +3,26 @@
 
 using DataStructures
 using FixedSizeArrays
-
 type Node
   index::UInt8 # The computer won't be able to compute a 16x16 solution, so this should be good enough.
   neighbors::Vector{UInt8}
 end
-    N = 6;
 
-function print_path(list)
-    last = list[end];
-    list = list[1:end-1];
-    for node in list
-        i1,i2 = ind2sub((N,N), node.index);
-        print("($i1,$i2) => ")
-    end
-    i1,i2 = ind2sub((N,N), last.index);
-    println("($i1,$i2)");
-end
-
-function allocate_budget(node_list)
-    # Extract node identities
-    L = length(node_list)
-    path = Vector{UInt8}(L)
-    iter =0;
-    for n in node_list
-        iter+=1;
-        path[iter] = UInt8(n.index);
-    end
-
-
-    # In future will need to input: f, B
-    #function values
-    f = ones(L) # in reality, this would be f(path)
-    B = 100
-    b_min = 1;
-    # find out how many constraints are active
-    path_unsorted = path;
-    sortperm!(path, f, rev=true)
-    split = b_min*ones(L);
-    num_active_constraints = 1;
-    beta = 1;
-    b_k = b_min;
-    while true
-        gamma = 0;
-        [gamma += (f[num_active_constraints]/f[i])^2 for i = 1:num_active_constraints]
-        beta = (B-b_min*(L-num_active_constraints))/gamma;
-        (beta < b_min || num_active_constraints == L)&&break
-        b_k = beta
-        num_active_constraints += 1;
-    end
-#    num_active_constraints -= 1
-
-    for i = 1:num_active_constraints
-        split[i] = b_k*f[i]^2/(f[num_active_constraints]^2)
-    end
-    
-#    println("$num_active_constraints constraints with $b_k to all");
-    reward = 0;
-    [reward += f[i]^2*sqrt(b_k)/f[num_active_constraints] for i = 1:num_active_constraints]
-    [reward += f[i]*sqrt(b_min) for i = num_active_constraints+1:L]
-    return reward, path_unsorted, split
-end
 
 # Enumerate the paths.
-function BFS()
+function BFS(N)
     if(N*N > 256)
         error("N is too large - will cause overflow and will not finish in reasonable time (Try N < 16)");
     end
+    node_vals = ones(N*N)
+    B = 100
+    b_min = 1;
 
     # BFS algorithm initialization
     NodeList = Vector{Node}(N^2);
-    [NodeList[i] = Node(UInt8(i), Vector{UInt8}()) for i = 1:N^2]
+    for i = 1:N^2
+        NodeList[i] = Node(UInt8(i), Vector{UInt8}())
+    end
 
     # make neighbor lists
     for i1 = 1:N
@@ -104,44 +53,80 @@ function BFS()
 #        end
 #    end
 
-    Q = Queue(Vector{Node});
+    Q = Queue(Vector{UInt8});
     goal = sub2ind((N,N), N,N);
-    enqueue!(Q, [NodeList[sub2ind((N,N), 1,1)]])
+    enqueue!(Q, [UInt8(sub2ind((N,N), 1,1))])
 
-    max_val = 0;
-    max_path = [];
-
+    max_val = Float64(0);
+    max_path = Vector{UInt8}();
+    max_budget = Float64(0)
     status_tracker = 0;
     while(!isempty(Q))
+        #Print status for sanity
         status_tracker+=1;
-        if(mod(status_tracker,10000)==0)
+        if(mod(status_tracker,100000)==0)
            print(".");
         end
-        if(mod(status_tracker,1000000)==0)
+        if(mod(status_tracker,10000000)==0)
            println()
         end
 
+        # Pop path from queue, check if complete
         current = dequeue!(Q)
-        last_node = current[end];
-        if(current[end].index == goal)
-            #check optimality of path
-            val, path, split = allocate_budget(current)
+        last_node = NodeList[current[end]];
+        if(last_node.index == goal)
+            # check optimality of path
+            node_path = Vector{Node}(length(current))
+            L = length(current);
+            f = ones(L)
+            for i = 1:L
+            	node_path[i] = NodeList[current[i]] 
+                f[i] = node_vals[current[i]]
+            end
+
+            # Optimize budget allocation:
+            path = current;
+            sortperm!(path, f, rev=true)
+            num_active_constraints = UInt8(0);
+            # Find number of active constraints:
+            b_k = Float64(0);
+            k = L+1
+            while(b_k < b_min && k > 1)
+                k-=1;
+                gamma = norm(f[1:k]./f[k])^2
+                b_k = (B- (L-k)*b_min)/gamma
+            end
+            num_active_constraints = k
+            b_used = (B-(L-k)*b_min)/sum((f[1:k]./f[k]).^2); 
+
+            # Compute budget allocations, using Lagrangian solution
+            split = b_min*ones(Float64,L);
+            for i = 1:num_active_constraints
+                split[i] = b_k*f[i]^2/(f[num_active_constraints]^2)
+            end
+            val = (f'*sqrt(split))[1]
             if(val > max_val)
                 max_val = val;
-                max_path = current;
-                println("optval: $max_val, length ", length(max_path), " Budget ", sum(split))
+                max_path = node_path;
+                max_budget = sum(split)
             end
-        end
- 
-        for n in last_node.neighbors
-            if !(NodeList[n] in current)
-                newpath = [current; NodeList[n]];
-                enqueue!(Q, newpath)
+        else
+        # Expand path if not at goal yet 
+            for n in last_node.neighbors
+                if !(n in current)
+                    L = length(current);
+                    newpath = Vector{UInt8}(L+1);
+                    for ii = 1:L
+                        newpath[ii]=current[ii];
+                    end
+                    newpath[L+1] = n;
+                    enqueue!(Q, newpath)
+                end
             end
         end
     end 
 
-    println("$status_tracker paths computed. Maximum objective value is $max_val, and the path is ");
+    println("\n$status_tracker paths computed. Maximum objective value is $max_val, used $max_budget budget, and the path is ");
 
     endpt = max_path[end];
     max_path = max_path[1:end-1]
@@ -152,5 +137,6 @@ function BFS()
     i1,i2 = ind2sub((N,N),endpt.index)
     println("($i1,$i1)");
 
+#    return max_val, max_path
 end
 
